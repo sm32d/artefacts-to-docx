@@ -1,0 +1,6 @@
+SNo,Heading,Description,Screenshot,Format
+1,"Config flag rollout check","Verified the new checkout-v2 feature flag is enabled in the non-prod config service and reflects correctly in the app settings page.",sample_02.png,
+2,"Backfill NULL customer_status to ACTIVE","UPDATE customers
+SET status = 'ACTIVE'
+WHERE status IS NULL;",sample_01.png,code
+3,"Access review — removed stale service account","Removed the deprecated svc-batch-old service account from the IAM group after confirming no active jobs reference it. Cross-checked against the last 30 days of audit logs.",sample_02.png,
