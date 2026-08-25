@@ -1,9 +1,0 @@
-SNo,Heading,Description,Screenshot,Format
-1,"Backfill NULL customer_status to ACTIVE for legacy accounts","UPDATE customers
-SET status = 'ACTIVE'
-WHERE status IS NULL;",sample_01.png,code
-2,"Verify no NULL statuses remain post-patch","SELECT id, customer_name, status, updated_at
-FROM customers
-WHERE status = 'ACTIVE'
-ORDER BY updated_at DESC
-LIMIT 3;",sample_02.png,code
