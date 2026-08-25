@@ -1,8 +1,8 @@
 # Verification Report Generator
 
 Generic evidence-pack generator — data patches, config changes, access reviews,
-test runs, anything that's "here's what I did + a screenshot proving it." You edit
-one CSV + drop screenshots in a folder; the script builds a formatted Word doc
+test runs, anything that's "here's what I did + a screenshot proving it." Feed it
+a CSV (or a `.sql` file of patch statements) and it builds a formatted Word doc
 (heading, description, screenshot per item, one item per page).
 
 ## Quick start
@@ -13,20 +13,22 @@ node generate_report.js items.csv report.docx --title "UAT Evidence Pack" --ref 
 ```
 
 1. Fill in `items.csv` — one row per item (see [CSV format](#csv-format)). Got a
-   `.sql` file of patch statements instead? See [Generating the CSV from a .sql file](#generating-the-csv-from-a-sql-file).
+   `.sql` file of patch statements instead? Skip the CSV entirely — see
+   [Generating a report straight from a .sql file](#generating-a-report-straight-from-a-sql-file).
 2. Put the matching screenshots in `screenshots/`. Got a lot of items and don't want
    to fuss with matching filenames to rows? See [Template mode](#template-mode--paste-screenshots-directly-in-word).
 3. Run the command above (see [CLI reference](#cli-reference) for all flags).
 4. Open `report.docx`, check it, send it to your reviewer.
 
-## Generating the CSV from a .sql file
+## Generating a report straight from a .sql file
 
-If your evidence is a batch of SQL statements, you don't have to hand-build the CSV.
-`sql_to_csv.js` splits a `.sql` file into statements and writes them straight into
-the CSV format `generate_report.js` expects, each row set to `Format,code`.
+If your evidence is a batch of SQL statements, `generate_report.js` can take the
+`.sql` file directly — no CSV step needed. It's auto-detected by the `.sql`
+extension, split into statements, and each one becomes an item with its
+`Description` rendered as a code block:
 
 ```bash
-node sql_to_csv.js patch.sql items.csv
+node generate_report.js patch.sql report.docx --title "Customer Status Backfill" --label "Patch"
 ```
 
 Put a single-line `-- comment` directly above a statement to use as its `Heading`:
@@ -46,9 +48,21 @@ LIMIT 3;
 ```
 
 No comment above a statement? The heading falls back to that statement's first
-line, truncated to 60 characters. The `Screenshot` column is always left blank —
-capturing evidence is still a manual step, so fill in filenames in the CSV (or a
-spreadsheet app) once you've saved the screenshots into `screenshots/`.
+line, truncated to 60 characters. See [sql_parser.js](sql_parser.js) for the full
+comment-placement rules (trailing comments, multi-line blocks, decorative dividers
+like `-- ====...====` are all handled). Since a `.sql` file has no `Screenshot`
+column, [template mode](#template-mode--paste-screenshots-directly-in-word) is
+switched on automatically — capture evidence by pasting straight into the doc.
+
+Want to review or hand-edit the items (fix a heading, tweak a description) before
+generating the doc, rather than going straight to Word? Use `sql_to_csv.js` to get
+an intermediate CSV first, then run `generate_report.js` on that as usual:
+
+```bash
+node sql_to_csv.js patch.sql items.csv
+# ...edit items.csv if needed...
+node generate_report.js items.csv report.docx --title "Customer Status Backfill" --label "Patch"
+```
 
 ## Template mode — paste screenshots directly in Word
 
@@ -94,21 +108,21 @@ that one item is flagged in red inline and every other item still generates.
 ## CLI reference
 
 ```
-node generate_report.js [csvPath] [outputPath] [flags]
+node generate_report.js [inputPath] [outputPath] [flags]
 ```
 
 | Argument | Default | Description |
 |---|---|---|
-| `csvPath` (positional 1) | `items.csv` | Input CSV file. |
+| `inputPath` (positional 1) | `items.csv` | Input file — a CSV, or a `.sql` file (auto-detected by extension, no CSV step needed). |
 | `outputPath` (positional 2) | `report.docx` | Output Word file. |
-| `--screenshots <dir>` | `<csvPath dir>/screenshots` | Folder to look up `Screenshot` filenames in. |
+| `--screenshots <dir>` | `<inputPath dir>/screenshots` | Folder to look up `Screenshot` filenames in. |
 | `--title <text>` | `Verification Report` | Title on the cover page. |
 | `--ref <text>` | *(blank)* | Reference/ticket number, e.g. a change or Jira ID. |
 | `--env <text>` | `Non-Production` | Environment the work was verified in. |
 | `--author <text>` | *(blank)* | "Prepared by" name on the cover page. |
 | `--date <text>` | today's date | Cover page date (`YYYY-MM-DD`). |
 | `--label <text>` | `Item` | Word used before each number in section headings — e.g. `Patch 1`, `Test Case 1`. |
-| `--template` | off | Skip embedding an image for rows missing a screenshot; leave an empty paste box instead. See [Template mode](#template-mode--paste-screenshots-directly-in-word). |
+| `--template` | off (always on for `.sql` input) | Skip embedding an image for rows missing a screenshot; leave an empty paste box instead. See [Template mode](#template-mode--paste-screenshots-directly-in-word). |
 
 All flags are optional.
 
@@ -125,6 +139,18 @@ custom label so headings read "Patch 1", "Patch 2", ...:
 
 ```bash
 node generate_report.js patches.csv patch_report.docx \
+  --title "Customer Status Backfill" \
+  --ref "CHG0012345" \
+  --env "Production" \
+  --author "Dominik" \
+  --label "Patch"
+```
+
+**Same patch batch, straight from the .sql file** — no CSV step, template mode
+kicks in automatically since there's no `Screenshot` column to read from:
+
+```bash
+node generate_report.js patch.sql patch_report.docx \
   --title "Customer Status Backfill" \
   --ref "CHG0012345" \
   --env "Production" \

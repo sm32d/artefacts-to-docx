@@ -3,17 +3,24 @@
 // Generic evidence/artifact report — not tied to SQL patches specifically.
 //
 // Usage:
-//   node generate_report.js [csvPath] [outputPath] [--title "..."] [--ref "..."]
+//   node generate_report.js [inputPath] [outputPath] [--title "..."] [--ref "..."]
 //        [--env "..."] [--author "..."] [--date "..."] [--label "Item"] [--template]
 //
-// Defaults: csvPath=items.csv, outputPath=report.docx, label="Item"
+// inputPath can be a CSV (default items.csv) or a .sql file of patch
+// statements — .sql is detected by extension and parsed straight into items
+// (see sql_parser.js), no intermediate CSV needed. Use sql_to_csv.js instead
+// when you want to review/hand-edit the items (headings, descriptions) before
+// generating the doc.
+//
+// Defaults: inputPath=items.csv, outputPath=report.docx, label="Item"
 // Requires: npm install docx   (already present in this environment)
 //
 // --template: skip embedding images for rows with no Screenshot filename set
 // (or file not found) and leave an empty bordered "paste zone" there instead —
 // for when you'd rather build the doc skeleton first, then paste screenshots
 // straight into Word as you capture them. Rows that DO have a screenshot on
-// disk still get it embedded automatically either way.
+// disk still get it embedded automatically either way. Implied automatically
+// when the input is a .sql file, since there's no Screenshot column at all.
 
 const fs = require("fs");
 const path = require("path");
@@ -22,6 +29,7 @@ const {
   ShadingType, BorderStyle, AlignmentType, PageBreak, Table, TableRow,
   TableCell, WidthType, VerticalAlign,
 } = require("docx");
+const { sqlTextToItems } = require("./sql_parser");
 
 // ---------- CLI args ----------
 function parseArgs(argv) {
@@ -39,10 +47,12 @@ function parseArgs(argv) {
 }
 
 const { positional, flags } = parseArgs(process.argv.slice(2));
-const csvPath = positional[0] || "items.csv";
+const inputPath = positional[0] || "items.csv";
 const outPath = positional[1] || "report.docx";
-const SCREENSHOT_DIR = flags.screenshots || path.join(path.dirname(csvPath), "screenshots");
-const TEMPLATE_MODE = !!flags.template;
+const SCREENSHOT_DIR = flags.screenshots || path.join(path.dirname(inputPath), "screenshots");
+const IS_SQL_INPUT = path.extname(inputPath).toLowerCase() === ".sql";
+// .sql input has no Screenshot column at all, so template mode is implied.
+const TEMPLATE_MODE = !!flags.template || IS_SQL_INPUT;
 
 const meta = {
   title: flags.title || "Verification Report",
@@ -312,8 +322,10 @@ function titlePage() {
 
 // ---------- main ----------
 function main() {
-  const items = loadItems(csvPath);
-  if (items.length === 0) throw new Error("No rows found in CSV.");
+  const items = IS_SQL_INPUT
+    ? sqlTextToItems(fs.readFileSync(inputPath, "utf8"))
+    : loadItems(inputPath);
+  if (items.length === 0) throw new Error(`No ${IS_SQL_INPUT ? "statements" : "rows"} found in ${inputPath}.`);
 
   const body = [...titlePage()];
   items.forEach((it, i) => body.push(...itemSection(it, i === 0)));
