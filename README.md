@@ -89,13 +89,13 @@ are just capturing evidence as you go.
 
 ## CSV format
 
-| Column | Required | Notes |
-|---|---|---|
-| `SNo` | optional | Item number. Auto-fills from row position if left blank. |
-| `Heading` | **yes** | Short title — becomes the section heading. |
-| `Description` | **yes** | The write-up. Multi-line is fine as long as the cell is quoted (Excel/Sheets do this automatically with Alt+Enter). |
-| `Screenshot` | **yes** | Filename only, e.g. `01.png` — the file itself lives in `screenshots/`. |
-| `Format` | optional | Leave blank for a normal paragraph. Set to `code` (or `sql`) to render that row's `Description` as a shaded monospace block instead. |
+| Column        | Required | Notes                                                                                                                                |
+| ------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `SNo`         | optional | Item number. Auto-fills from row position if left blank.                                                                             |
+| `Heading`     | **yes**  | Short title — becomes the section heading.                                                                                           |
+| `Description` | **yes**  | The write-up. Multi-line is fine as long as the cell is quoted (Excel/Sheets do this automatically with Alt+Enter).                  |
+| `Screenshot`  | **yes**  | Filename only, e.g. `01.png` — the file itself lives in `screenshots/`.                                                              |
+| `Format`      | optional | Leave blank for a normal paragraph. Set to `code` (or `sql`) to render that row's `Description` as a shaded monospace block instead. |
 
 Column names are matched flexibly and by name, not position — `s/no`, `SQL Query`,
 `Screenshot Filename`, etc. all resolve fine, and columns can be in any order.
@@ -111,18 +111,18 @@ that one item is flagged in red inline and every other item still generates.
 node generate_report.js [inputPath] [outputPath] [flags]
 ```
 
-| Argument | Default | Description |
-|---|---|---|
-| `inputPath` (positional 1) | `items.csv` | Input file — a CSV, or a `.sql` file (auto-detected by extension, no CSV step needed). |
-| `outputPath` (positional 2) | `report.docx` | Output Word file. |
-| `--screenshots <dir>` | `<inputPath dir>/screenshots` | Folder to look up `Screenshot` filenames in. |
-| `--title <text>` | `Verification Report` | Title on the cover page. |
-| `--ref <text>` | *(blank)* | Reference/ticket number, e.g. a change or Jira ID. |
-| `--env <text>` | `Non-Production` | Environment the work was verified in. |
-| `--author <text>` | *(blank)* | "Prepared by" name on the cover page. |
-| `--date <text>` | today's date | Cover page date (`YYYY-MM-DD`). |
-| `--label <text>` | `Item` | Word used before each number in section headings — e.g. `Patch 1`, `Test Case 1`. |
-| `--template` | off (always on for `.sql` input) | Skip embedding an image for rows missing a screenshot; leave an empty paste box instead. See [Template mode](#template-mode--paste-screenshots-directly-in-word). |
+| Argument                    | Default                          | Description                                                                                                                                                       |
+| --------------------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inputPath` (positional 1)  | `items.csv`                      | Input file — a CSV, or a `.sql` file (auto-detected by extension, no CSV step needed).                                                                            |
+| `outputPath` (positional 2) | `report.docx`                    | Output Word file.                                                                                                                                                 |
+| `--screenshots <dir>`       | `<inputPath dir>/screenshots`    | Folder to look up `Screenshot` filenames in.                                                                                                                      |
+| `--title <text>`            | `Verification Report`            | Title on the cover page.                                                                                                                                          |
+| `--ref <text>`              | _(blank)_                        | Reference/ticket number, e.g. a change or Jira ID.                                                                                                                |
+| `--env <text>`              | `Non-Production`                 | Environment the work was verified in.                                                                                                                             |
+| `--author <text>`           | _(blank)_                        | "Prepared by" name on the cover page.                                                                                                                             |
+| `--date <text>`             | today's date                     | Cover page date (`YYYY-MM-DD`).                                                                                                                                   |
+| `--label <text>`            | `Item`                           | Word used before each number in section headings — e.g. `Patch 1`, `Test Case 1`.                                                                                 |
+| `--template`                | off (always on for `.sql` input) | Skip embedding an image for rows missing a screenshot; leave an empty paste box instead. See [Template mode](#template-mode--paste-screenshots-directly-in-word). |
 
 All flags are optional.
 
@@ -189,6 +189,3 @@ node generate_report.js test_cases.csv test_report.docx \
 - Node.js with the `docx` package (`npm install docx`).
 - That's it — no other dependencies. Image dimensions (for aspect-ratio-correct
   scaling) are read directly from PNG/JPEG/GIF file headers, no external tools needed.
-
-If you don't want to run Node locally, just send the filled CSV and the
-`screenshots/` folder and I'll generate the `.docx` for you.
