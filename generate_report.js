@@ -4,10 +4,16 @@
 //
 // Usage:
 //   node generate_report.js [csvPath] [outputPath] [--title "..."] [--ref "..."]
-//        [--env "..."] [--author "..."] [--date "..."] [--label "Item"]
+//        [--env "..."] [--author "..."] [--date "..."] [--label "Item"] [--template]
 //
 // Defaults: csvPath=items.csv, outputPath=report.docx, label="Item"
 // Requires: npm install docx   (already present in this environment)
+//
+// --template: skip embedding images for rows with no Screenshot filename set
+// (or file not found) and leave an empty bordered "paste zone" there instead —
+// for when you'd rather build the doc skeleton first, then paste screenshots
+// straight into Word as you capture them. Rows that DO have a screenshot on
+// disk still get it embedded automatically either way.
 
 const fs = require("fs");
 const path = require("path");
@@ -23,8 +29,11 @@ function parseArgs(argv) {
   const flags = {};
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a.startsWith("--")) { flags[a.slice(2)] = argv[i + 1]; i++; }
-    else positional.push(a);
+    if (a.startsWith("--")) {
+      const next = argv[i + 1];
+      if (next === undefined || next.startsWith("--")) { flags[a.slice(2)] = true; }
+      else { flags[a.slice(2)] = next; i++; }
+    } else positional.push(a);
   }
   return { positional, flags };
 }
@@ -33,6 +42,7 @@ const { positional, flags } = parseArgs(process.argv.slice(2));
 const csvPath = positional[0] || "items.csv";
 const outPath = positional[1] || "report.docx";
 const SCREENSHOT_DIR = flags.screenshots || path.join(path.dirname(csvPath), "screenshots");
+const TEMPLATE_MODE = !!flags.template;
 
 const meta = {
   title: flags.title || "Verification Report",
@@ -197,6 +207,19 @@ function textBlock(text) {
   }));
 }
 
+function pasteZone() {
+  return new Paragraph({
+    border: {
+      top: { style: BorderStyle.DASHED, size: 6, color: "AAAAAA" },
+      bottom: { style: BorderStyle.DASHED, size: 6, color: "AAAAAA" },
+      left: { style: BorderStyle.DASHED, size: 6, color: "AAAAAA" },
+      right: { style: BorderStyle.DASHED, size: 6, color: "AAAAAA" },
+    },
+    spacing: { before: 120, after: 120, line: 600 },
+    children: [],
+  });
+}
+
 function labelParagraph(text) {
   return new Paragraph({
     spacing: { before: 200, after: 80 },
@@ -219,18 +242,12 @@ function itemSection(item, isFirst) {
   const isCode = item.format === "code" || item.format === "sql";
   children.push(...(isCode ? codeBlock(item.description) : textBlock(item.description)));
 
-  children.push(labelParagraph("Screenshot"));
+  children.push(labelParagraph(TEMPLATE_MODE ? "Screenshot(s)" : "Screenshot"));
 
   const imgPath = item.screenshot ? path.join(SCREENSHOT_DIR, item.screenshot) : null;
-  if (!imgPath) {
-    children.push(new Paragraph({
-      children: [new TextRun({ text: "[No screenshot provided for this item]", italics: true, color: "B00020" })],
-    }));
-  } else if (!fs.existsSync(imgPath) || fs.statSync(imgPath).isDirectory()) {
-    children.push(new Paragraph({
-      children: [new TextRun({ text: `[Missing screenshot file: ${item.screenshot}]`, italics: true, color: "B00020" })],
-    }));
-  } else {
+  const hasImage = imgPath && fs.existsSync(imgPath) && !fs.statSync(imgPath).isDirectory();
+
+  if (hasImage) {
     const dims = scaledImageDims(imgPath);
     const ext = path.extname(imgPath).slice(1).toLowerCase();
     const type = ext === "jpg" ? "jpeg" : ext;
@@ -241,6 +258,16 @@ function itemSection(item, isFirst) {
         data: fs.readFileSync(imgPath),
         transformation: { width: dims.width, height: dims.height },
       })],
+    }));
+  } else if (TEMPLATE_MODE) {
+    children.push(pasteZone());
+  } else if (!imgPath) {
+    children.push(new Paragraph({
+      children: [new TextRun({ text: "[No screenshot provided for this item]", italics: true, color: "B00020" })],
+    }));
+  } else {
+    children.push(new Paragraph({
+      children: [new TextRun({ text: `[Missing screenshot file: ${item.screenshot}]`, italics: true, color: "B00020" })],
     }));
   }
   return children;

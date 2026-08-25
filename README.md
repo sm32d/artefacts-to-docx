@@ -12,10 +12,66 @@ npm install docx
 node generate_report.js items.csv report.docx --title "UAT Evidence Pack" --ref "CHG0012345"
 ```
 
-1. Fill in `items.csv` — one row per item (see [CSV format](#csv-format)).
-2. Put the matching screenshots in `screenshots/`.
+1. Fill in `items.csv` — one row per item (see [CSV format](#csv-format)). Got a
+   `.sql` file of patch statements instead? See [Generating the CSV from a .sql file](#generating-the-csv-from-a-sql-file).
+2. Put the matching screenshots in `screenshots/`. Got a lot of items and don't want
+   to fuss with matching filenames to rows? See [Template mode](#template-mode--paste-screenshots-directly-in-word).
 3. Run the command above (see [CLI reference](#cli-reference) for all flags).
 4. Open `report.docx`, check it, send it to your reviewer.
+
+## Generating the CSV from a .sql file
+
+If your evidence is a batch of SQL statements, you don't have to hand-build the CSV.
+`sql_to_csv.js` splits a `.sql` file into statements and writes them straight into
+the CSV format `generate_report.js` expects, each row set to `Format,code`.
+
+```bash
+node sql_to_csv.js patch.sql items.csv
+```
+
+Put a single-line `-- comment` directly above a statement to use as its `Heading`:
+
+```sql
+-- Backfill NULL customer_status to ACTIVE for legacy accounts
+UPDATE customers
+SET status = 'ACTIVE'
+WHERE status IS NULL;
+
+-- Verify no NULL statuses remain post-patch
+SELECT id, customer_name, status, updated_at
+FROM customers
+WHERE status = 'ACTIVE'
+ORDER BY updated_at DESC
+LIMIT 3;
+```
+
+No comment above a statement? The heading falls back to that statement's first
+line, truncated to 60 characters. The `Screenshot` column is always left blank —
+capturing evidence is still a manual step, so fill in filenames in the CSV (or a
+spreadsheet app) once you've saved the screenshots into `screenshots/`.
+
+## Template mode — paste screenshots directly in Word
+
+With a lot of items, matching screenshot filenames to CSV rows gets tedious. Instead,
+generate the doc skeleton straight from the CSV — headings, descriptions, code blocks,
+everything — but with the images left out, and open that in Word. As you work through
+each step, screenshot it and paste (`Cmd+V`) straight into the dashed box under that
+item; the box has no placeholder text to delete first, and its border expands to frame
+the image once you paste, so there's nothing to clean up. Pasting more than one image
+in the same box works too, for items that need multiple screenshots.
+
+```bash
+node generate_report.js items.csv report.docx --title "UAT Evidence Pack" --template
+```
+
+Rows that already have a `Screenshot` filename filled in (and the file exists) still
+get embedded automatically — `--template` only adds the paste box where one's missing,
+so it's safe to combine with a partially-filled CSV.
+
+The tradeoff: once you start pasting into the doc by hand, it's no longer regenerated
+from the CSV — if you edit a description afterward you'd need to regenerate the
+skeleton and re-paste everything. Best used once you're happy with the CSV content and
+are just capturing evidence as you go.
 
 ## CSV format
 
@@ -52,6 +108,7 @@ node generate_report.js [csvPath] [outputPath] [flags]
 | `--author <text>` | *(blank)* | "Prepared by" name on the cover page. |
 | `--date <text>` | today's date | Cover page date (`YYYY-MM-DD`). |
 | `--label <text>` | `Item` | Word used before each number in section headings — e.g. `Patch 1`, `Test Case 1`. |
+| `--template` | off | Skip embedding an image for rows missing a screenshot; leave an empty paste box instead. See [Template mode](#template-mode--paste-screenshots-directly-in-word). |
 
 All flags are optional.
 
@@ -104,9 +161,8 @@ node generate_report.js test_cases.csv test_report.docx \
 ## Requirements
 
 - Node.js with the `docx` package (`npm install docx`).
-- That's it — no other dependencies for generation. (Image dimensions are auto-read
-  via ImageMagick's `identify` if present; if not, images just fall back to a default
-  size, so it still works without it.)
+- That's it — no other dependencies. Image dimensions (for aspect-ratio-correct
+  scaling) are read directly from PNG/JPEG/GIF file headers, no external tools needed.
 
 If you don't want to run Node locally, just send the filled CSV and the
 `screenshots/` folder and I'll generate the `.docx` for you.
