@@ -5,12 +5,14 @@
 // Usage:
 //   node generate_report.js [inputPath] [outputPath] [--title "..."] [--ref "..."]
 //        [--env "..."] [--author "..."] [--date "..."] [--label "Item"] [--template]
+//        [--no-page-breaks]
 //
 // inputPath can be a CSV (default items.csv) or a .sql file of patch
 // statements — .sql is detected by extension and parsed straight into items
 // (see sql_parser.js), no intermediate CSV needed. Use sql_to_csv.js instead
 // when you want to review/hand-edit the items (headings, descriptions) before
-// generating the doc.
+// generating the doc. Or use run_sql_report.js to execute the .sql against a
+// live database and capture real query output as evidence instead of either.
 //
 // Defaults: inputPath=items.csv, outputPath=report.docx, label="Item"
 // Requires: npm install docx   (already present in this environment)
@@ -21,6 +23,10 @@
 // straight into Word as you capture them. Rows that DO have a screenshot on
 // disk still get it embedded automatically either way. Implied automatically
 // when the input is a .sql file, since there's no Screenshot column at all.
+//
+// This file also works as a library — require("./generate_report").buildDocx
+// — for other scripts (e.g. run_sql_report.js) that already have an items
+// array and just need the .docx bytes back.
 
 const fs = require("fs");
 const path = require("path");
@@ -30,40 +36,6 @@ const {
   TableCell, WidthType, VerticalAlign,
 } = require("docx");
 const { sqlTextToItems } = require("./sql_parser");
-
-// ---------- CLI args ----------
-function parseArgs(argv) {
-  const positional = [];
-  const flags = {};
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a.startsWith("--")) {
-      const next = argv[i + 1];
-      if (next === undefined || next.startsWith("--")) { flags[a.slice(2)] = true; }
-      else { flags[a.slice(2)] = next; i++; }
-    } else positional.push(a);
-  }
-  return { positional, flags };
-}
-
-const { positional, flags } = parseArgs(process.argv.slice(2));
-const inputPath = positional[0] || "items.csv";
-const outPath = positional[1] || "report.docx";
-const SCREENSHOT_DIR = flags.screenshots || path.join(path.dirname(inputPath), "screenshots");
-const IS_SQL_INPUT = path.extname(inputPath).toLowerCase() === ".sql";
-// .sql input has no Screenshot column at all, so template mode is implied.
-const TEMPLATE_MODE = !!flags.template || IS_SQL_INPUT;
-
-const meta = {
-  title: flags.title || "Verification Report",
-  ref: flags.ref || "",
-  env: flags.env || "Non-Production",
-  author: flags.author || "",
-  date: flags.date || new Date().toISOString().slice(0, 10),
-  // e.g. "Patch", "Test Case", "Change" — prefix for each section heading.
-  // --label "" (explicitly empty) means "no prefix, just the number".
-  label: flags.label !== undefined ? flags.label : "Item",
-};
 
 // ---------- minimal RFC4180 CSV parser (handles quoted multiline fields, "" escapes) ----------
 function parseCSV(text) {
@@ -237,24 +209,124 @@ function labelParagraph(text) {
   });
 }
 
-function itemSection(item, isFirst) {
+function noteParagraph(text, color) {
+  return new Paragraph({ children: [new TextRun({ text, italics: true, color })] });
+}
+
+// ---------- result rendering (live SQL execution evidence — see run_sql_report.js) ----------
+// item.result shapes:
+//   { kind: "rows", columns: [...], rows: [{...}], rowCount, truncated, csvFile? }
+//   { kind: "count", command: "UPDATE", rowCount: 3 }
+//   { kind: "command", command: "BEGIN" }               // no row count to show
+//   { kind: "notice", text: "Transaction COMMITTED" }
+//   { kind: "error", text: "..." }
+const MAX_TABLE_COLUMNS = 6;
+const MAX_CELL_CHARS = 200;
+
+function cellText(v) {
+  if (v === null || v === undefined) return "NULL";
+  if (v instanceof Date) return v.toISOString().slice(0, 19).replace("T", " ");
+  const s = typeof v === "object" ? JSON.stringify(v) : String(v);
+  return s.length > MAX_CELL_CHARS ? s.slice(0, MAX_CELL_CHARS) + "…" : s;
+}
+
+function kvCell(text, opts = {}) {
+  return new TableCell({
+    width: opts.width,
+    shading: opts.shade ? { type: ShadingType.CLEAR, fill: "F2F2F2" } : undefined,
+    children: [new Paragraph({
+      children: [new TextRun({
+        text, bold: !!opts.bold, italics: text === "NULL",
+        color: text === "NULL" ? "999999" : undefined, size: 18,
+      })],
+    })],
+  });
+}
+
+function wideRowsAsKeyValueBlocks(columns, rows) {
+  const blocks = [];
+  rows.forEach((row, i) => {
+    if (i > 0) blocks.push(new Paragraph({ spacing: { before: 80 }, children: [] }));
+    blocks.push(new Paragraph({
+      spacing: { after: 40 },
+      children: [new TextRun({ text: `Row ${i + 1}`, bold: true, size: 18, color: "666666" })],
+    }));
+    blocks.push(new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      rows: columns.map(col => new TableRow({
+        children: [kvCell(col, { bold: true, shade: true, width: { size: 30, type: WidthType.PERCENTAGE } }),
+          kvCell(cellText(row[col]), { width: { size: 70, type: WidthType.PERCENTAGE } })],
+      })),
+    }));
+  });
+  return blocks;
+}
+
+function rowsAsTable(columns, rows) {
+  const header = new TableRow({
+    tableHeader: true,
+    children: columns.map(col => kvCell(col, { bold: true, shade: true })),
+  });
+  const body = rows.map(row => new TableRow({ children: columns.map(col => kvCell(cellText(row[col]))) }));
+  return new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [header, ...body] });
+}
+
+function resultBlock(result) {
+  switch (result.kind) {
+    case "rows": {
+      if (result.rows.length === 0) return [noteParagraph("(0 rows)", "888888")];
+      const blocks = result.columns.length > MAX_TABLE_COLUMNS
+        ? wideRowsAsKeyValueBlocks(result.columns, result.rows)
+        : [rowsAsTable(result.columns, result.rows)];
+      if (result.truncated) {
+        const note = result.csvFile
+          ? `(showing first ${result.rows.length} of ${result.rowCount} rows — full results in ${result.csvFile})`
+          : `(showing first ${result.rows.length} of ${result.rowCount} rows)`;
+        blocks.push(noteParagraph(note, "888888"));
+      }
+      return blocks;
+    }
+    case "count":
+      return [noteParagraph(`${result.command} — ${result.rowCount} row(s) affected`, "444444")];
+    case "command":
+      return [noteParagraph(result.command, "444444")];
+    case "notice":
+      return [new Paragraph({ children: [new TextRun({ text: result.text, bold: true, color: "1A7A1A" })] })];
+    case "error":
+      return [new Paragraph({ children: [new TextRun({ text: `ERROR: ${result.text}`, bold: true, color: "B00020" })] })];
+    default:
+      return [noteParagraph("(no output)", "888888")];
+  }
+}
+
+function itemSection(item, isFirst, ctx) {
   const children = [];
-  if (!isFirst) children.push(new Paragraph({ children: [new PageBreak()] }));
+  if (!isFirst && ctx.PAGE_BREAKS) children.push(new Paragraph({ children: [new PageBreak()] }));
 
   const headingText = item.heading || "(no heading provided)";
-  const headingPrefix = meta.label ? `${meta.label} ${item.sno}` : `${item.sno}`;
+  const headingPrefix = ctx.meta.label ? `${ctx.meta.label} ${item.sno}` : `${item.sno}`;
+  // Without page breaks, space items apart with extra room above the heading
+  // and keep it from being stranded at the bottom of a page.
+  const flowing = !ctx.PAGE_BREAKS;
   children.push(new Paragraph({
     heading: HeadingLevel.HEADING_1,
-    spacing: { before: 0, after: 160 },
+    keepNext: flowing,
+    spacing: { before: flowing && !isFirst ? 480 : 0, after: 160 },
     children: [new TextRun(`${headingPrefix} — ${headingText}`)],
   }));
 
   const isCode = item.format === "code" || item.format === "sql";
   children.push(...(isCode ? codeBlock(item.description) : textBlock(item.description)));
 
-  children.push(labelParagraph(TEMPLATE_MODE ? "Screenshot(s)" : "Screenshot"));
+  if (item.result) {
+    children.push(labelParagraph("Result"));
+    children.push(...resultBlock(item.result));
+    return children;
+  }
 
-  const imgPath = item.screenshot ? path.join(SCREENSHOT_DIR, item.screenshot) : null;
+  children.push(labelParagraph(ctx.TEMPLATE_MODE ? "Screenshot(s)" : "Screenshot"));
+
+  const imgPath = item.screenshot ? path.join(ctx.SCREENSHOT_DIR, item.screenshot) : null;
   const hasImage = imgPath && fs.existsSync(imgPath) && !fs.statSync(imgPath).isDirectory();
 
   if (hasImage) {
@@ -269,7 +341,7 @@ function itemSection(item, isFirst) {
         transformation: { width: dims.width, height: dims.height },
       })],
     }));
-  } else if (TEMPLATE_MODE) {
+  } else if (ctx.TEMPLATE_MODE) {
     children.push(pasteZone());
   } else if (!imgPath) {
     children.push(new Paragraph({
@@ -283,7 +355,7 @@ function itemSection(item, isFirst) {
   return children;
 }
 
-function titlePage() {
+function titlePage(meta) {
   const metaRows = [
     ["Reference", meta.ref || "—"],
     ["Environment", meta.env],
@@ -320,15 +392,22 @@ function titlePage() {
   ];
 }
 
-// ---------- main ----------
-function main() {
-  const items = IS_SQL_INPUT
-    ? sqlTextToItems(fs.readFileSync(inputPath, "utf8"))
-    : loadItems(inputPath);
-  if (items.length === 0) throw new Error(`No ${IS_SQL_INPUT ? "statements" : "rows"} found in ${inputPath}.`);
+// ---------- library entry point ----------
+// items: array of { sno, heading, description, format, screenshot? , result? }
+// config: { meta: {title, ref, env, author, date, label}, templateMode, screenshotDir,
+//           pageBreaks (default true — each item starts on a new page) }
+// Returns a Promise<Buffer> of the .docx bytes.
+async function buildDocx(items, config) {
+  if (items.length === 0) throw new Error("No items to render.");
+  const ctx = {
+    meta: config.meta,
+    TEMPLATE_MODE: !!config.templateMode,
+    SCREENSHOT_DIR: config.screenshotDir || "screenshots",
+    PAGE_BREAKS: config.pageBreaks !== false,
+  };
 
-  const body = [...titlePage()];
-  items.forEach((it, i) => body.push(...itemSection(it, i === 0)));
+  const body = [...titlePage(ctx.meta)];
+  items.forEach((it, i) => body.push(...itemSection(it, i === 0, ctx)));
 
   const doc = new Document({
     sections: [{
@@ -340,10 +419,56 @@ function main() {
     styles: { default: { document: { run: { font: "Calibri", size: 22 } } } },
   });
 
-  Packer.toBuffer(doc).then(buf => {
-    fs.writeFileSync(outPath, buf);
-    console.log(`Wrote ${outPath} (${items.length} items)`);
-  });
+  return Packer.toBuffer(doc);
 }
 
-main();
+module.exports = { buildDocx, MAX_TABLE_COLUMNS };
+
+// ---------- CLI ----------
+function parseArgs(argv) {
+  const positional = [];
+  const flags = {};
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a.startsWith("--")) {
+      const next = argv[i + 1];
+      if (next === undefined || next.startsWith("--")) { flags[a.slice(2)] = true; }
+      else { flags[a.slice(2)] = next; i++; }
+    } else positional.push(a);
+  }
+  return { positional, flags };
+}
+
+async function main() {
+  const { positional, flags } = parseArgs(process.argv.slice(2));
+  const inputPath = positional[0] || "items.csv";
+  const outPath = positional[1] || "report.docx";
+  const screenshotDir = flags.screenshots || path.join(path.dirname(inputPath), "screenshots");
+  const isSqlInput = path.extname(inputPath).toLowerCase() === ".sql";
+  // .sql input has no Screenshot column at all, so template mode is implied.
+  const templateMode = !!flags.template || isSqlInput;
+
+  const meta = {
+    title: flags.title || "Verification Report",
+    ref: flags.ref || "",
+    env: flags.env || "Non-Production",
+    author: flags.author || "",
+    date: flags.date || new Date().toISOString().slice(0, 10),
+    // e.g. "Patch", "Test Case", "Change" — prefix for each section heading.
+    // --label "" (explicitly empty) means "no prefix, just the number".
+    label: flags.label !== undefined ? flags.label : "Item",
+  };
+
+  const items = isSqlInput
+    ? sqlTextToItems(fs.readFileSync(inputPath, "utf8"))
+    : loadItems(inputPath);
+  if (items.length === 0) throw new Error(`No ${isSqlInput ? "statements" : "rows"} found in ${inputPath}.`);
+
+  const buf = await buildDocx(items, { meta, templateMode, screenshotDir, pageBreaks: !flags["no-page-breaks"] });
+  fs.writeFileSync(outPath, buf);
+  console.log(`Wrote ${outPath} (${items.length} items)`);
+}
+
+if (require.main === module) {
+  main().catch(err => { console.error(err.message || err); process.exit(1); });
+}

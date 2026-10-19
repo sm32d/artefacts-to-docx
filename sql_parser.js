@@ -30,15 +30,21 @@ function parseStatements(text) {
     raw.replace(/^\/\*/, "").replace(/\*\/$/, "")
       .split("\n").map(l => l.replace(/^\s*\*?\s?/, "").trim()).filter(Boolean);
 
-  function finish(trailing) {
+  let start = -1; // char offset where the current statement's own text began
+
+  function finish(trailing, end) {
     const trimmed = sql.trim();
-    if (trimmed) statements.push({ leading, trailing, sql: trimmed });
+    if (trimmed) statements.push({ leading, trailing, sql: trimmed, start, end });
     sql = "";
     leading = [];
+    start = -1;
   }
 
   while (i < n) {
     const c = text[i], c2 = text[i + 1];
+    if (start === -1 && sql.trim() === "" && c !== "-" && !(c === "/" && c2 === "*") && !/\s/.test(c)) {
+      start = i;
+    }
 
     if (c === "-" && c2 === "-") {
       let end = text.indexOf("\n", i);
@@ -91,14 +97,14 @@ function parseStatements(text) {
         trailing = text.slice(k + 2, Math.max(k + 2, end - 2)).trim();
         i = end;
       }
-      finish(trailing);
+      finish(trailing, i);
       continue;
     }
 
     sql += c;
     i++;
   }
-  finish("");
+  finish("", n);
   return statements;
 }
 
@@ -106,16 +112,24 @@ function parseStatements(text) {
 // skip them and use the first line that actually has content instead.
 const DECORATIVE = /^[-=_*#~]{3,}$/;
 
+// A commented-out `-- COMMIT;` / `-- ROLLBACK;` (see findCheckpointMarker
+// below) is scaffolding for a human running the script manually, not
+// documentation — it belongs to no statement in particular and would just
+// contaminate the heading/description of whatever statement happens to
+// follow it, so it's dropped entirely rather than kept like other comments.
+const MARKER_LINE = /^(commit|rollback)\s*;?$/i;
+
 function statementToItem(st, sno) {
-  const headingIdx = st.leading.findIndex(l => l.trim() && !DECORATIVE.test(l.trim()));
+  const leading = st.leading.filter(l => !MARKER_LINE.test(l.trim()));
+  const headingIdx = leading.findIndex(l => l.trim() && !DECORATIVE.test(l.trim()));
   const heading = headingIdx !== -1
-    ? st.leading[headingIdx]
+    ? leading[headingIdx]
     : (st.trailing || st.sql.split("\n")[0].slice(0, 60));
 
   // every leading comment line other than the one used as heading (dividers,
   // blank spacer lines, extra detail) is kept in the description so nothing
   // gets silently dropped.
-  const extra = headingIdx !== -1 ? st.leading.filter((_, i) => i !== headingIdx) : st.leading;
+  const extra = headingIdx !== -1 ? leading.filter((_, i) => i !== headingIdx) : leading;
   const preamble = extra.length ? extra.map(l => `-- ${l}`).join("\n") + "\n" : "";
   const trailingNote = headingIdx !== -1 && st.trailing ? `\n-- ${st.trailing}` : "";
   const description = preamble + st.sql + trailingNote;
@@ -130,4 +144,17 @@ function sqlTextToItems(text) {
   return statements.map((st, i) => statementToItem(st, i + 1));
 }
 
-module.exports = { parseStatements, statementToItem, sqlTextToItems };
+// Finds the conventional "decide here" marker for a BEGIN...COMMIT/ROLLBACK
+// block that's been left commented out on purpose, e.g.:
+//   -- COMMIT;
+//   -- ROLLBACK;
+// Returns the character offset of the first such line, or -1 if there isn't
+// one. Used by run_sql_report.js to know where to pause and ask before
+// actually running a COMMIT or ROLLBACK.
+function findCheckpointMarker(text) {
+  const re = /^[ \t]*--[ \t]*(commit|rollback)[ \t]*;?[ \t]*$/im;
+  const m = re.exec(text);
+  return m ? m.index : -1;
+}
+
+module.exports = { parseStatements, statementToItem, sqlTextToItems, findCheckpointMarker };
